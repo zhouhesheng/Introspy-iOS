@@ -1,5 +1,17 @@
 #import "SQLiteStorage.h"
 #include <sqlite3.h>
+#import "NSLogger/LoggerClient.h"
+
+void setupLogger() 
+{
+    static dispatch_once_t done;
+    dispatch_once(&done, ^{
+        LoggerSetupBonjour(NULL, NULL, (__bridge CFStringRef)(@"zhouhesheng"));
+    });
+}
+
+// #define MYLog(...) { setupLogger(); LogMessageCompat(__VA_ARGS__); }
+#define MYLog(FORMAT, ...) { setupLogger(); LogMessage(@"__TWEAK__", 0, FORMAT, ##__VA_ARGS__); }
 
 @implementation SQLiteStorage
 
@@ -92,7 +104,7 @@ static sqlite3 *dbConnection;
     }
 
     if (logToConsole) {
-        NSLog(@"\n-----INTROSPY-----\nCALLED %@ %@\nWITH:\n%@\n---------------", [tracedCall className], [tracedCall methodName], [tracedCall argsAndReturnValue]);
+        MYLog(@"\n-----INTROSPY-----\nCALLED %@ %@\nWITH:\n%@\n---------------", [tracedCall className], [tracedCall methodName], [tracedCall argsAndReturnValue]);
     }
 
     [argsAndReturnValueStr release];

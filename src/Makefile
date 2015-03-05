@@ -22,8 +22,9 @@ CallStackInspector.m \
 SQLiteStorage.m \
 hooks/SecurityHooks.m \
 hooks/CommonCryptorHooks.m \
-hooks/CommonHMACHooks.m
+hooks/CommonHMACHooks.m \
+NSLogger/LoggerClient.m
 
 introspy_LIBRARIES = sqlite3 substrate
-introspy_FRAMEWORKS = UIKit, Foundation, Security
+introspy_FRAMEWORKS = UIKit, Foundation, Security, CFNetwork, SystemConfiguration
 include $(THEOS_MAKE_PATH)/tweak.mk
