@@ -13,8 +13,39 @@ void setupLogger()
 // #define MYLog(...) { setupLogger(); LogMessageCompat(__VA_ARGS__); }
 #define MYLog(FORMAT, ...) { setupLogger(); LogMessage(@"__INTROSPY__", 0, FORMAT, ##__VA_ARGS__); }
 
-@implementation SQLiteStorage
+@interface NSDictionary (addStringValueForDataItems)
 
+- (NSDictionary *) dictionaryByAddingStringValueForDataItems;
+
+@end
+
+@implementation NSDictionary (addStringValueForDataItems)
+
+- (NSDictionary *) dictionaryByAddingStringValueForDataItems {
+    
+    NSMutableDictionary *args = [[NSMutableDictionary alloc]init];
+    [self enumerateKeysAndObjectsUsingBlock:^(id key, id obj, BOOL *stop) {
+        if ([obj isKindOfClass: [NSDictionary class]]) {
+            [args setObject: [obj dictionaryByAddingStringValueForDataItems] forKey:key];
+        } else {
+            [args setObject: obj forKey: key];
+            if ([obj isKindOfClass: [NSData class]]) {
+                NSString *str = [[NSString alloc] initWithData:obj encoding:NSUTF8StringEncoding];
+                if (str) {
+                    [args setObject: str forKey: [NSString stringWithFormat:@"%@_STRVALUE", key]];
+                } else {
+                    [args setObject: @"__NON_READABLE__" forKey: [NSString stringWithFormat:@"%@_STRVALUE", key]];
+                }
+                [str release];
+            }
+        }
+    }];
+    
+    return args;
+}
+@end
+
+@implementation SQLiteStorage
 
 // Database settings
 static BOOL logToConsole = TRUE;
@@ -104,7 +135,7 @@ static sqlite3 *dbConnection;
     }
 
     if (logToConsole) {
-        MYLog(@"\n-----INTROSPY-----\nCALLED %@ %@\nWITH:\n%@\n---------------", [tracedCall className], [tracedCall methodName], [tracedCall argsAndReturnValue]);
+        MYLog(@"\n-----INTROSPY-----\nCALLED %@ %@\nWITH:\n%@\n---------------", [tracedCall className], [tracedCall methodName], [[tracedCall argsAndReturnValue] dictionaryByAddingStringValueForDataItems]);
     }
 
     [argsAndReturnValueStr release];
