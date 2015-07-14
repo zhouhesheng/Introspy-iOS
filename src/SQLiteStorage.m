@@ -33,10 +33,10 @@ void setupLogger()
                 NSString *str = [[NSString alloc] initWithData:obj encoding:NSUTF8StringEncoding];
                 if (str) {
                     [args setObject: str forKey: [NSString stringWithFormat:@"%@_STRVALUE", key]];
-                    [args setObject: [obj length] forKey: [NSString stringWithFormat:@"%@_length", key]];
+                    [args setObject: @([obj length]) forKey: [NSString stringWithFormat:@"%@_LENGTH", key]];
                 } else {
                     [args setObject: @"__NON_READABLE__" forKey: [NSString stringWithFormat:@"%@_STRVALUE", key]];
-                    [args setObject: [obj length] forKey: [NSString stringWithFormat:@"%@_length", key]];
+                    [args setObject: @([obj length]) forKey: [NSString stringWithFormat:@"%@_LENGTH", key]];
                 }
                 [str release];
             }

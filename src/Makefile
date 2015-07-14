@@ -1,5 +1,5 @@
-THEOS_DEVICE_IP = 10.10.0.170
-TARGET = iPhone:8.3:4.3
+THEOS_DEVICE_IP = 10.10.0.102
+TARGET = iPhone:8.4:4.3
 ARCHS =  armv7 arm64
 
 include theos/makefiles/common.mk
