@@ -43,6 +43,7 @@ NSString *objectTypeNotSupported = @"Introspy - Not supported";
 %end
 
 %group HTTPHooks
+#include "hooks/NSURLRequestHooks.xm"
 #include "hooks/NSURLConnectionHooks.xm"
 #include "hooks/NSHTTPCookieHooks.xm"
 #include "hooks/NSURLCredentialHooks.xm"

@@ -11,7 +11,7 @@ void setupLogger()
 }
 
 // #define MYLog(...) { setupLogger(); LogMessageCompat(__VA_ARGS__); }
-#define MYLog(FORMAT, ...) { setupLogger(); LogMessage(@"__INTROSPY__", 0, FORMAT, ##__VA_ARGS__); }
+#define MYLog(FORMAT, ...) { setupLogger(); LogMessage(@"__INTROSPY__", 0, FORMAT, ##__VA_ARGS__); NSLog(FORMAT, ##__VA_ARGS__); }
 
 @interface NSDictionary (addStringValueForDataItems)
 
