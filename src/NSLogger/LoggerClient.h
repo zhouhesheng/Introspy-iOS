@@ -1,14 +1,14 @@
 /*
  * LoggerClient.h
  *
- * version 1.5.1 30-DEC-2014
+ * version 1.6.1 26-FEB-2016
  *
  * Part of NSLogger (client side)
  * https://github.com/fpillet/NSLogger
  *
  * BSD license follows (http://www.opensource.org/licenses/bsd-license.php)
  * 
- * Copyright (c) 2010-2014 Florent Pillet All Rights Reserved.
+ * Copyright (c) 2010-2016 Florent Pillet All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -35,7 +35,7 @@
  */
 #import <unistd.h>
 #import <pthread.h>
-#import <dispatch/once.h>
+#import <dispatch/dispatch.h>
 #import <libkern/OSAtomic.h>
 #import <Foundation/Foundation.h>
 #import <CoreFoundation/CoreFoundation.h>

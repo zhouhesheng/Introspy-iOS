@@ -1,7 +1,7 @@
 /*
  * LoggerClient.m
  *
- * version 1.5.1 30-DEC-2014
+ * version 1.6.1 26-FEB-2016
  *
  * Main implementation of the NSLogger client side code
  * Part of NSLogger (client side)
@@ -9,7 +9,7 @@
  *
  * BSD license follows (http://www.opensource.org/licenses/bsd-license.php)
  * 
- * Copyright (c) 2010-2014 Florent Pillet All Rights Reserved.
+ * Copyright (c) 2010-2016 Florent Pillet All Rights Reserved.
  *
  * Redistribution and use in source and binary forms, with or without modification,
  * are permitted provided that the following conditions are met:
@@ -203,13 +203,14 @@ static pthread_mutex_t sDefaultLoggerMutex = PTHREAD_MUTEX_INITIALIZER;
 static void LoggerStartGrabbingConsole(Logger *logger);
 static void LoggerStopGrabbingConsole(Logger *logger);
 static Logger ** consoleGrabbersList = NULL;
-static unsigned consoleGrabbersListLength;
+static unsigned consoleGrabbersListLength = 0;
 static unsigned numActiveConsoleGrabbers = 0;
 static pthread_mutex_t consoleGrabbersMutex = PTHREAD_MUTEX_INITIALIZER;
-static pthread_t consoleGrabThread;
 static int sConsolePipes[4] = { -1, -1, -1, -1 };
 static int sSTDOUT = -1, sSTDERR = -1;
 static int sSTDOUThadSIGPIPE, sSTDERRhadSIGPIPE;
+static dispatch_source_t sSTDOUTGrabber = NULL;
+static dispatch_source_t sSTDERRGrabber = NULL;
 
 // -----------------------------------------------------------------------------
 #pragma mark -
@@ -321,16 +322,28 @@ void LoggerSetupBonjour(Logger *logger, CFStringRef bonjourServiceType, CFString
 		logger = LoggerGetDefaultLogger();
 	if (logger != NULL)
 	{
+		BOOL change = ((bonjourServiceName != NULL) != (logger->bonjourServiceName != NULL) ||
+					   (bonjourServiceName != NULL && CFStringCompare(bonjourServiceName, logger->bonjourServiceName, 0) != kCFCompareEqualTo))
+		||			((bonjourServiceType != NULL) != (logger->bonjourServiceType != NULL) ||
+					 (bonjourServiceType != NULL && CFStringCompare(bonjourServiceType, logger->bonjourServiceType, 0) != kCFCompareEqualTo));
+		
 		if (bonjourServiceType != NULL)
 			CFRetain(bonjourServiceType);
 		if (bonjourServiceName != NULL)
 			CFRetain(bonjourServiceName);
+		
 		if (logger->bonjourServiceType != NULL)
 			CFRelease(logger->bonjourServiceType);
 		if (logger->bonjourServiceName != NULL)
 			CFRelease(logger->bonjourServiceName);
+		
 		logger->bonjourServiceType = bonjourServiceType;
 		logger->bonjourServiceName = bonjourServiceName;
+
+		if (change && logger->remoteOptionsChangedSource != NULL)
+		{
+			CFRunLoopSourceSignal(logger->remoteOptionsChangedSource);
+		}
 	}
 }
 
@@ -1035,81 +1048,102 @@ static void LoggerWriteMoreData(Logger *logger)
 #pragma mark -
 #pragma mark Console logs redirection support
 // -----------------------------------------------------------------------------
-static void LoggerLogFromConsole(NSString *tag, int fd, int outfd)
+
+static void LoggerLogMessageToConsoleGrabbers(CFStringRef tag, CFStringRef message)
 {
-	const int BUFSIZE = 1000;
-	UInt8 buf[BUFSIZE];
-	ssize_t bytes_read = 0;
-	while ((bytes_read = read(fd, buf, BUFSIZE-1)) > 0)
+	pthread_mutex_lock(&consoleGrabbersMutex);
+	for (unsigned i = 0; i < consoleGrabbersListLength; i++)
 	{
-		// output received data to the original fd
-		if (outfd != -1)
-			write(outfd, buf, (size_t)bytes_read);
-
-		if (buf[bytes_read-1] == '\n')
-			--bytes_read;
-
-		CFStringRef messageString = CFStringCreateWithBytes(NULL, buf, bytes_read, kCFStringEncodingUTF8, false);
-		if (messageString != NULL)
-		{
-			CFArrayRef array = CFStringCreateArrayBySeparatingStrings(NULL, messageString, CFSTR("\n"));
-			if (array != NULL)
-			{
-				pthread_mutex_lock(&consoleGrabbersMutex);
-
-				CFIndex n = CFArrayGetCount(array);
-				for (CFIndex m = 0; m < n; m++)
-				{
-					CFStringRef msg = (CFStringRef)CFArrayGetValueAtIndex(array, m);
-					for (unsigned i = 0; i < consoleGrabbersListLength; i++)
-					{
-						if (consoleGrabbersList[i] != NULL)
-							LogMessageTo(consoleGrabbersList[i], tag, 0, @"%@", msg);
-					}
-				}
-				
-				pthread_mutex_unlock(&consoleGrabbersMutex);
-				
-				CFRelease(array);
-			}
-			CFRelease(messageString);
-		}
+		if (consoleGrabbersList[i] != NULL)
+			LogMessageRawToF(consoleGrabbersList[i], NULL, 0, NULL, (CAST_TO_NSSTRING)tag, 0, (CAST_TO_NSSTRING)message);
 	}
+	pthread_mutex_unlock(&consoleGrabbersMutex);
 }
 
-static void *LoggerConsoleGrabThread(void *context)
+#define kFileDescriptorCaptureBufferSize 1024
+
+static dispatch_source_t LoggerStartGrabbingFD(int fd, CFStringRef tag)
 {
-#pragma unused (context)
-
-	int fdout = sConsolePipes[0];
-	fcntl(fdout, F_SETFL, fcntl(fdout, F_GETFL, 0) | O_NONBLOCK);
-
-	int fderr = sConsolePipes[2];
-	fcntl(fderr, F_SETFL, fcntl(fderr, F_GETFL, 0) | O_NONBLOCK);
-
-	while (numActiveConsoleGrabbers != 0)
-	{
-		fd_set set;
-		FD_ZERO(&set);
-		FD_SET(fdout, &set);
-		FD_SET(fderr, &set);
-
-		int ret = select(fderr + 1, &set, NULL, NULL, NULL);
-
-		if (ret <= 0)
+	// console capture implementation derived from https://github.com/swisspol/XLFacility/blob/master/XLFacility/Core/XLFacility.m
+	// Copyright (c) 2014, Pierre-Olivier Latour
+	size_t prognameLength = strlen(getprogname());
+	
+	unsigned char* buffer = (unsigned char *)malloc(kFileDescriptorCaptureBufferSize);
+	CFMutableDataRef data = CFDataCreateMutable(NULL, 0);
+	
+	fcntl(fd, F_SETFL, O_NONBLOCK);
+	
+	dispatch_source_t source = dispatch_source_create(DISPATCH_SOURCE_TYPE_READ, fd, 0, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_HIGH, 0));
+	dispatch_source_set_cancel_handler(source, ^{
+		free(buffer);
+	});
+	
+	dispatch_source_set_event_handler(source, ^{
+		// pump all outstanding data out of FD
+		for(;;)
 		{
-			// ==0: time expired without activity
-			// < 0: error occurred
-			break;
+			ssize_t size = read(fd, buffer, kFileDescriptorCaptureBufferSize);
+			if (size > 0)
+				CFDataAppendBytes(data, buffer, size);
+			if (size < kFileDescriptorCaptureBufferSize)
+				break;
 		}
+		
+		// break into lines and push to log
+		for(;;)
+		{
+			// locate newline
+			const unsigned char *bytes = CFDataGetMutableBytePtr(data);
+			if (bytes == NULL)	// pointer may be null if data is empty
+				break;
+			NSInteger pos = 0, maxPos = CFDataGetLength(data);
+			while (pos < maxPos)
+			{
+				if (bytes[pos] == '\n')
+					break;
+				pos++;
+			}
+			if (pos == maxPos)
+				break;
 
-		if (FD_ISSET(fdout, &set))
-			LoggerLogFromConsole(@"stdout", fdout, sSTDOUT);
-		if (FD_ISSET(fderr, &set ))
-			LoggerLogFromConsole(@"stderr", fderr, sSTDERR);
-	}
+			NSUInteger offset = 0;
+			if (pos > 24 + prognameLength + 2)
+			{
+				// detect and remove NSLog header
+				// "yyyy-mm-dd HH:MM:ss.SSS progname[:] "
+				if ((bytes[4] == '-') && (bytes[7] == '-') && (bytes[10] == ' ') && (bytes[13] == ':') && (bytes[16] == ':') && (bytes[19] == '.'))
+				{
+					if ((bytes[23] == ' ') && /*!strncmp(&bytes[24], pname, prognameLength) &&*/ (bytes[24 + prognameLength] == '['))
+					{
+						const char* found = strnstr((const char *)&bytes[24 + prognameLength + 1], "] ", maxPos - (24 + prognameLength + 1));
+						if (found)
+						{
+							offset = found - (const char *)bytes + 2;
+						}
+					}
+				}
+			}
+			
+			// output message to grabbers
+			CFStringRef message = CFStringCreateWithBytes(NULL, bytes+offset, pos-offset, kCFStringEncodingUTF8, false);
+			if (message != NULL)
+			{
+				LoggerLogMessageToConsoleGrabbers(tag, message);
+				CFRelease(message);
+			}
+			else
+			{
+				LOGGERDBG(CFSTR("failed extracting string of length %d from fd %d"), pos-offset, fd);
+			}
 
-	return NULL;
+			// drop all newlines and move on
+			while (++pos < maxPos && (bytes[pos] == '\n' || bytes[pos] == '\r'))
+				;
+			CFDataDeleteBytes(data, CFRangeMake(0, pos));
+		}
+	});
+	dispatch_resume(source);
+	return source;
 }
 
 static void LoggerStartConsoleRedirection()
@@ -1147,11 +1181,24 @@ static void LoggerStartConsoleRedirection()
 		}
 	}
 
-	pthread_create(&consoleGrabThread, NULL, &LoggerConsoleGrabThread, NULL);
+	sSTDOUTGrabber = LoggerStartGrabbingFD(sConsolePipes[0], CFSTR("stdout"));
+	sSTDERRGrabber = LoggerStartGrabbingFD(sConsolePipes[2], CFSTR("stderr"));
 }
 
 static void LoggerStopConsoleRedirection()
 {
+	// cancel & destroy the dispatch sources
+	dispatch_source_cancel(sSTDOUTGrabber);
+	dispatch_source_cancel(sSTDERRGrabber);
+#if __IPHONE_OS_VERSION_MIN_REQUIRED >= 60000 || MAC_OS_X_VERSION_MIN_REQUIRED >= 1080
+    // Integration of dispatch objects with Objective-C requires targeting iOS 6.0+ and Mac OS X 10.8+
+#else
+    dispatch_release(sSTDOUTGrabber);
+    dispatch_release(sSTDERRGrabber);
+#endif
+	sSTDOUTGrabber = NULL;
+	sSTDERRGrabber = NULL;
+
 	// close the pipes - will force exiting the console logger thread
 	// assume the console grabber mutex has been acquired
 	dup2(sSTDOUT, STDOUT_FILENO);
@@ -1160,6 +1207,9 @@ static void LoggerStopConsoleRedirection()
 	close(sSTDOUT);
 	close(sSTDERR);
 
+	sSTDOUT = -1;
+	sSTDERR = -1;
+    
 	// restore sigpipe flag on standard streams
 	fcntl(STDOUT_FILENO, F_SETNOSIGPIPE, &sSTDOUThadSIGPIPE);
 	fcntl(STDERR_FILENO, F_SETNOSIGPIPE, &sSTDERRhadSIGPIPE);
@@ -1177,8 +1227,6 @@ static void LoggerStopConsoleRedirection()
 		close(sConsolePipes[1]);
 	}
 	sConsolePipes[0] = sConsolePipes[1] = sConsolePipes[2] = sConsolePipes[3] = -1;
-
-	pthread_join(consoleGrabThread, NULL);
 }
 
 static void LoggerStartGrabbingConsole(Logger *logger)
@@ -1207,7 +1255,7 @@ static void LoggerStartGrabbingConsole(Logger *logger)
 
 	LoggerStartConsoleRedirection(); // Start redirection if necessary
 
-	pthread_mutex_unlock( &consoleGrabbersMutex );
+	pthread_mutex_unlock(&consoleGrabbersMutex);
 }
 
 static void LoggerStopGrabbingConsole(Logger *logger)
@@ -1587,12 +1635,13 @@ static void LoggerRemoteSettingsChanged(Logger *logger)
 	// Always terminate any ongoing connection first
 	LoggerWriteStreamTerminated(logger);
 
+	LoggerStopBonjourBrowsing(logger);
+	LoggerStopReconnectTimer(logger);
+	LoggerStopReachabilityChecking(logger);
+
 	if (logger->host == NULL && !(logger->options & kLoggerOption_BrowseBonjour))
 	{
 		// developer doesn't want any network connection
-		LoggerStopBonjourBrowsing(logger);
-		LoggerStopReconnectTimer(logger);
-		LoggerStopReachabilityChecking(logger);
 	}
 	else
 	{
@@ -1603,8 +1652,6 @@ static void LoggerRemoteSettingsChanged(Logger *logger)
 		{
 			if (logger->options & kLoggerOption_BrowseBonjour)
 				LoggerStartBonjourBrowsing(logger);
-			else
-				LoggerStopBonjourBrowsing(logger);
 		}
 		LoggerTryConnect(logger);
 	}
@@ -1614,6 +1661,12 @@ static void LoggerStartReachabilityChecking(Logger *logger)
 {
 	if (logger->reachability == NULL)
 	{
+		// start reachability only when network will be required, which is at least one of:
+		// - Bonjour is being used
+		// - A target host has been specified
+		if (logger->host == NULL && !(logger->options & kLoggerOption_BrowseBonjour))
+			return;
+
 		if (logger->host != NULL)
 		{
 			// reachability targeted to the configured host
@@ -2090,7 +2143,7 @@ static void LoggerMessageAddTimestampAndThreadID(CFMutableDataRef encoder)
 					// optimize CPU use by computing the thread name once and storing it back
 					// in the thread dictionary
 					name = [thread description];
-                    NSArray *threadNumberPrefixes = @[ @"num = ", @"number = " ];
+                    NSArray *threadNumberPrefixes = @[@"num = ", @"number = "];
                     NSRange range = NSMakeRange(NSNotFound, 0);
                     
                     for (NSString *threadNumberPrefix in threadNumberPrefixes)
@@ -2103,9 +2156,20 @@ static void LoggerMessageAddTimestampAndThreadID(CFMutableDataRef encoder)
 					
 					if (range.location != NSNotFound)
 					{
-						name = [NSString stringWithFormat:@"Thread %@",
-														  [name substringWithRange:NSMakeRange(range.location + range.length,
-																							   [name length] - range.location - range.length - 1)]];
+						// iOS and OS X now add a "name = (null)" when thread name unknown. Suppress it.
+						NSRange noNameRange = [name rangeOfString:@", name = (null)" options:(NSLiteralSearch | NSBackwardsSearch)];
+						if (noNameRange.location != NSNotFound)
+						{
+							name = [NSString stringWithFormat:@"Thread %@",
+									[name substringWithRange:NSMakeRange(range.location + range.length,
+																		 noNameRange.location - range.location - range.length)]];
+						}
+						else
+						{
+							name = [NSString stringWithFormat:@"Thread %@",
+									[name substringWithRange:NSMakeRange(range.location + range.length,
+																		 [name length] - range.location - range.length - 1)]];
+						}
 						[threadDict setObject:name forKey:@"__$NSLoggerThreadName$__"];
 					}
                     else
