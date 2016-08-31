@@ -1,17 +1,9 @@
 #import "SQLiteStorage.h"
 #include <sqlite3.h>
-#import "NSLogger/LoggerClient.h"
 
-void setupLogger() 
-{
-    static dispatch_once_t done;
-    dispatch_once(&done, ^{
-        LoggerSetupBonjour(NULL, NULL, (__bridge CFStringRef)(@"zhouhesheng"));
-    });
-}
 
-// #define MYLog(...) { setupLogger(); LogMessageCompat(__VA_ARGS__); }
-#define MYLog(FORMAT, ...) { setupLogger(); LogMessage(@"__INTROSPY__", 0, FORMAT, ##__VA_ARGS__); NSLog(FORMAT, ##__VA_ARGS__); }
+
+#define MYLog(FORMAT, ...) { [SQLiteStorage setupLogger]; LogMessage(@"__INTROSPY__", 0, FORMAT, ##__VA_ARGS__); NSLog(FORMAT, ##__VA_ARGS__); }
 
 @interface NSDictionary (addStringValueForDataItems)
 
@@ -61,6 +53,13 @@ static const char saveTracedCallStmtStr[] = "INSERT INTO tracedCalls VALUES (?1,
 static sqlite3_stmt *saveTracedCallStmt;
 static sqlite3 *dbConnection;
 
++(void) setupLogger 
+{
+    static dispatch_once_t done;
+    dispatch_once(&done, ^{
+        LoggerSetupBonjour(NULL, NULL, (__bridge CFStringRef)(@"zhouhesheng"));
+    });
+}
 
 - (SQLiteStorage *)initWithDefaultDBFilePathAndLogToConsole: (BOOL) shouldLog {
     NSString *DBFilePath = nil;
