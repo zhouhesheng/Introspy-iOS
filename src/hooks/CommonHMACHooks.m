@@ -18,6 +18,7 @@ size_t
 CCHmacOutputSizeFromRef(CCHmacContextRef ctx)
 __OSX_AVAILABLE_STARTING(__MAC_10_7, __IPHONE_5_0);
 
+#define MYLog(FORMAT, ...) { [SQLiteStorage setupLogger]; LogMessage(@"CommonHMACHooks", 0, FORMAT, ##__VA_ARGS__); }
 
 
 // from Apple's CommonHMAC.c implementation
@@ -71,10 +72,10 @@ static void (*original_CCHmacInit)(CCHmacContext *ctx, CCHmacAlgorithm algorithm
 static void replaced_CCHmacInit(CCHmacContext *ctx, CCHmacAlgorithm algorithm, const void *key, size_t keyLength) {
 
     original_CCHmacInit(ctx, algorithm, key, keyLength);
+    MYLog(@"replaced_CCHmacInit called, key %s", key);
 
     // Only log what the application directly calls. For example we don't want to log internal SSL crypto calls
     if ([CallStackInspector wasDirectlyCalledByApp]) {
-
         CallTracer *tracer = [[CallTracer alloc] initWithClass:@"C" andMethod:@"CCHmacInit"];
         [tracer addArgFromPlistObject:[NSNumber numberWithUnsignedInt: (unsigned int) ctx] withKey:@"ctx"];
         [tracer addArgFromPlistObject:[NSNumber numberWithUnsignedInt: (unsigned int) algorithm] withKey:@"algorithm"];
@@ -162,6 +163,7 @@ static void replaced_CCHmac(CCHmacAlgorithm algorithm, const void *key, size_t k
 @implementation CommonHMACHooks
 
 + (void)enableHooks {
+    MYLog(@"hooking CCHmacInit CCHmacUpdate CCHmacFinal CCHmac");
     MSHookFunction(CCHmacInit, replaced_CCHmacInit, (void **) &original_CCHmacInit);
     MSHookFunction(CCHmacUpdate, replaced_CCHmacUpdate, (void **) &original_CCHmacUpdate);
     MSHookFunction(CCHmacFinal, replaced_CCHmacFinal, (void **) &original_CCHmacFinal);

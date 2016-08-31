@@ -10,6 +10,7 @@
 // Nice global
 extern SQLiteStorage *traceStorage;
 
+#define MYLog(FORMAT, ...) { [SQLiteStorage setupLogger]; LogMessage(@"CommonDigestHooks", 0, FORMAT, ##__VA_ARGS__); }
 
 // No need to hook the CC_MDX_Init() functions as they don't do anything interesting
 
@@ -163,7 +164,8 @@ static unsigned char * log_CC_XXX(const void *data, CC_LONG len, unsigned char *
 
     // Only log what the application directly calls. For example we don't want to log internal SSL crypto calls
     if ([CallStackInspector wasDirectlyCalledByApp]) {
-
+        // NSString *str = [[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding] autorelease];
+        // MYLog(@"log_CC_XXX called, data<stringValue> %@, len %ld", str?:@"_NonReadable_", (long)len);
         CallTracer *tracer = [[CallTracer alloc] initWithClass:@"C" andMethod:functionName];
         [tracer addArgFromPlistObject:[PlistObjectConverter convertCBuffer: data withLength: len] withKey:@"data"];
         [tracer addArgFromPlistObject:[PlistObjectConverter convertCBuffer: md withLength: digestLen] withKey:@"md"];
