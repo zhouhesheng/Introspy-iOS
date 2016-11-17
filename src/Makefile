@@ -1,16 +1,11 @@
-THEOS_DEVICE_IP = 10.10.1.60
-TARGET = iPhone:9.3:7.0
+THEOS_DEVICE_IP = 10.10.1.174
+TARGET = iPhone::
 ARCHS =  armv7 arm64
 
-include theos/makefiles/common.mk
-
-# Xcode 5 got rid of GCC and forces the use of Clang
-# Clang complains about unused arguments
-# Most likely a bug in Theos, silence these warnings for now
-ADDITIONAL_CCFLAGS  = -Qunused-arguments
+include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = introspy
-introspy_FILES = Tweak.xmi \
+introspy_FILES = Tweak.xm \
 CallTracer.m \
 hooks/CommonDigestHooks.m \
 hooks/LibCHooks.m \
@@ -24,7 +19,10 @@ hooks/SecurityHooks.m \
 hooks/CommonCryptorHooks.m \
 hooks/CommonHMACHooks.m \
 NSLogger/LoggerClient.m
+introspy_LIBRARIES = sqlite3
 
-introspy_LIBRARIES = sqlite3 substrate
-introspy_FRAMEWORKS = UIKit, Foundation, Security, CFNetwork, SystemConfiguration
 include $(THEOS_MAKE_PATH)/tweak.mk
+
+after-install::
+	install.exec "killall -9 SpringBoard"
+
