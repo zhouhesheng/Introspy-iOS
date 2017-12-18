@@ -1,8 +1,8 @@
-THEOS_DEVICE_IP = 10.10.1.174
+THEOS_DEVICE_IP = 10.10.1.240
 TARGET = iPhone::
 ARCHS =  armv7 arm64
 
-include $(THEOS)/makefiles/common.mk
+include theos/makefiles/common.mk
 
 TWEAK_NAME = introspy
 introspy_FILES = Tweak.xm \
